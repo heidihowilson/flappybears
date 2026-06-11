@@ -121,6 +121,7 @@ html, body {
 }
 
 .rekt { color: var(--danger-bright); font-size: 56px; }
+.survived { color: var(--success-bright); font-size: 56px; }
 
 .tagline { color: var(--text-muted); font-size: 15px; }
 

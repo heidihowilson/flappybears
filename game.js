@@ -93,50 +93,57 @@ renderMute();
 
 // ---------- Market data ----------
 let selectedCoin = "bitcoin";
-let candleData = null; // [{o,h,l,c,up}]
+let candleData = null; // [{t,o,h,l,c,up}] — the last 24h, 30-min candles
+let dataLo = 0, dataHi = 1; // global low/high of the 24h window
 let usingLiveData = false;
 const dataCache = {};
 
 function syntheticCandles() {
   const out = [];
   let price = 80000;
-  for (let i = 0; i < 200; i++) {
-    const drift = (Math.random() - 0.485) * price * 0.025;
+  const now = Date.now();
+  for (let i = 0; i < 48; i++) {
+    const drift = (Math.random() - 0.485) * price * 0.012;
     const o = price;
     const c = Math.max(100, price + drift);
-    const h = Math.max(o, c) * (1 + Math.random() * 0.008);
-    const l = Math.min(o, c) * (1 - Math.random() * 0.008);
-    out.push({ o, h, l, c, up: c >= o });
+    const h = Math.max(o, c) * (1 + Math.random() * 0.004);
+    const l = Math.min(o, c) * (1 - Math.random() * 0.004);
+    out.push({ t: now - (48 - i) * 30 * 60 * 1000, o, h, l, c, up: c >= o });
     price = c;
   }
   return out;
 }
 
+function setCandles(candles, live) {
+  candleData = candles;
+  usingLiveData = live;
+  dataLo = Math.min(...candles.map((k) => k.l));
+  dataHi = Math.max(...candles.map((k) => k.h));
+}
+
 async function loadCandles(coin) {
   const cached = dataCache[coin];
   if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
-    candleData = cached.candles;
-    usingLiveData = cached.live;
+    setCandles(cached.candles, cached.live);
     return;
   }
   try {
     const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${coin}/ohlc?vs_currency=usd&days=30`,
+      `https://api.coingecko.com/api/v3/coins/${coin}/ohlc?vs_currency=usd&days=1`,
       { signal: AbortSignal.timeout(6000) }
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rows = await res.json();
     if (!Array.isArray(rows) || rows.length < 20) throw new Error("bad data");
-    candleData = rows.map(([, o, h, l, c]) => ({ o, h, l, c, up: c >= o }));
-    usingLiveData = true;
-    dataCache[coin] = { at: Date.now(), candles: candleData, live: true };
+    const candles = rows.map(([t, o, h, l, c]) => ({ t, o, h, l, c, up: c >= o }));
+    setCandles(candles, true);
+    dataCache[coin] = { at: Date.now(), candles, live: true };
   } catch {
-    candleData = syntheticCandles();
-    usingLiveData = false;
+    setCandles(syntheticCandles(), false);
     dataCache[coin] = { at: Date.now(), candles: candleData, live: false };
   }
   dataNote.textContent = usingLiveData
-    ? `Candles: ${COIN_NAMES[coin]}/USD, last 30 days (live)`
+    ? `The real ${COIN_NAMES[coin]}/USD chart, last 24 hours — survive all ${candleData.length} candles`
     : "Candles: simulated (market data unavailable)";
 }
 
@@ -144,7 +151,7 @@ async function loadCandles(coin) {
 const STATE = { MENU: 0, PLAYING: 1, DYING: 2, OVER: 3 };
 let state = STATE.MENU;
 
-let bear, obstacles, score, best, speed, dist, candleIdx, deathPrice, shake;
+let bear, obstacles, score, best, speed, dist, candleIdx, deathPrice, shake, won;
 best = parseInt(localStorage.getItem("fb-best") || "0", 10);
 bestLine.textContent = `Best: ${best}`;
 
@@ -168,9 +175,10 @@ function reset() {
   dist = 0;
   shake = 0;
   deathPrice = null;
-  // Start somewhere random in the data so each run rides a different stretch
-  candleIdx = Math.floor(Math.random() * Math.max(1, candleData.length - 60));
-  scoreEl.textContent = "0";
+  won = false;
+  // The level IS the last 24 hours, ridden chronologically from candle 0
+  candleIdx = 0;
+  scoreEl.textContent = `0 / ${candleData.length}`;
   priceChip.textContent = `${COIN_NAMES[selectedCoin]} —`;
   // Pre-spawn obstacles off the right edge
   let x = W + 200;
@@ -180,33 +188,31 @@ function reset() {
   }
 }
 
-// Normalize a candle's close within a rolling window to a gap center y.
-function gapCenterFor(idx) {
-  const WINDOW = 36;
-  const lo = Math.max(0, idx - WINDOW);
-  const slice = candleData.slice(lo, idx + 1);
-  let min = Infinity, max = -Infinity;
-  for (const k of slice) {
-    if (k.l < min) min = k.l;
-    if (k.h > max) max = k.h;
-  }
-  const span = max - min || 1;
-  const t = (candleData[idx].c - min) / span; // 0 = low, 1 = high
-  const topPad = H * 0.16, botPad = H * 0.2;
+// Normalize a candle's close against the whole 24h range, so the gap path
+// traces the actual shape of the day's chart. The gap is clamped fully
+// on-screen: at the day's high/low you still get a candle stub on each side.
+function gapCenterFor(idx, gapH) {
+  const span = dataHi - dataLo || 1;
+  const t = (candleData[idx].c - dataLo) / span; // 0 = day's low, 1 = day's high
+  const lo = 26 + gapH / 2; // gap center at day's high
+  const hi = H - floorH() - 26 - gapH / 2; // gap center at day's low
   // High price = gap near top (you climb the pump, dive the dump)
-  return topPad + (1 - t) * (H - topPad - botPad);
+  return lo + (1 - t) * (hi - lo);
 }
 
 function spawnObstacle(x) {
-  const k = candleData[candleIdx % candleData.length];
+  if (candleIdx >= candleData.length) return; // end of the day's chart
+  const k = candleData[candleIdx];
   const gapH = gapHeightForScore(score);
-  const cy = gapCenterFor(candleIdx % candleData.length);
+  const cy = gapCenterFor(candleIdx, gapH);
   obstacles.push({
     x,
     gapTop: cy - gapH / 2,
     gapBot: cy + gapH / 2,
     up: k.up,
     price: k.c,
+    time: k.t,
+    isLast: candleIdx === candleData.length - 1,
     passed: false,
   });
   candleIdx++;
@@ -275,6 +281,30 @@ function fmtPrice(p) {
     : "$" + p.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
+function fmtTime(t) {
+  return new Date(t).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function win() {
+  won = true;
+  if (score > best) {
+    best = score;
+    localStorage.setItem("fb-best", String(best));
+  }
+  state = STATE.OVER;
+  sfx.score();
+  const lastK = candleData[candleData.length - 1];
+  $("over-title").textContent = "SURVIVED";
+  $("over-title").classList.remove("rekt");
+  $("over-title").classList.add("survived");
+  $("rekt-line").textContent =
+    `You rode 24 hours of ${COIN_NAMES[selectedCoin]} — closed at ${fmtPrice(lastK.c)}`;
+  $("final-score").textContent = score;
+  $("final-best").textContent = best;
+  overScreen.hidden = false;
+  hud.hidden = true;
+}
+
 function die() {
   state = STATE.DYING;
   shake = 14;
@@ -291,6 +321,9 @@ function die() {
 
 function showGameOver() {
   state = STATE.OVER;
+  $("over-title").textContent = "REKT";
+  $("over-title").classList.remove("survived");
+  $("over-title").classList.add("rekt");
   $("final-score").textContent = score;
   $("final-best").textContent = best;
   $("rekt-line").textContent = deathPrice
@@ -313,7 +346,7 @@ function update(dt) {
 
     for (const o of obstacles) o.x -= speed * dt;
 
-    // Recycle and spawn
+    // Recycle and spawn (the chart is finite — no wrap-around)
     if (obstacles.length && obstacles[0].x + CANDLE_W < -20) obstacles.shift();
     const last = obstacles[obstacles.length - 1];
     if (!last || last.x < W + 100) spawnObstacle((last ? last.x : W) + SPACING);
@@ -323,9 +356,10 @@ function update(dt) {
       if (!o.passed && o.x + CANDLE_W < bear.x - BEAR_R) {
         o.passed = true;
         score++;
-        scoreEl.textContent = String(score);
-        priceChip.textContent = `${COIN_NAMES[selectedCoin]} ${fmtPrice(o.price)}`;
+        scoreEl.textContent = `${score} / ${candleData.length}`;
+        priceChip.textContent = `${COIN_NAMES[selectedCoin]} ${fmtPrice(o.price)} · ${fmtTime(o.time)}`;
         sfx.score();
+        if (o.isLast) { win(); break; }
       }
       if (collides(o)) { die(); break; }
     }
@@ -604,7 +638,8 @@ if (location.hash === "#autoplay") {
     setInterval(() => {
       if (state !== STATE.PLAYING) return;
       const next = obstacles.find((o) => o.x + CANDLE_W > bear.x - BEAR_R);
-      if (next && bear.y > next.gapBot - 38 && bear.vy > -100) flap();
+      const target = next ? (next.gapTop + next.gapBot) / 2 + 25 : H * 0.5;
+      if (bear.y > target && bear.vy > -100) flap();
     }, 50);
   });
 }
