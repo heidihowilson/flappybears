@@ -64,6 +64,18 @@ html, body {
   backdrop-filter: blur(4px);
 }
 
+.hud-left {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.chip.small { font-size: 11px; }
+
+.over { color: var(--success-bright); }
+.under { color: var(--danger-bright); }
+
 .icon-btn {
   pointer-events: auto;
   cursor: pointer;

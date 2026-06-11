@@ -143,7 +143,8 @@ async function loadCandles(coin) {
     dataCache[coin] = { at: Date.now(), candles: candleData, live: false };
   }
   dataNote.textContent = usingLiveData
-    ? `The real ${COIN_NAMES[coin]}/USD chart, last 24 hours — survive all ${candleData.length} candles`
+    ? `The real ${COIN_NAMES[coin]}/USD chart, last 24h · range ` +
+      `${fmtPrice(dataLo)} – ${fmtPrice(dataHi)} · ${candleData.length} candles`
     : "Candles: simulated (market data unavailable)";
 }
 
@@ -151,21 +152,19 @@ async function loadCandles(coin) {
 const STATE = { MENU: 0, PLAYING: 1, DYING: 2, OVER: 3 };
 let state = STATE.MENU;
 
-let bear, obstacles, score, best, speed, dist, candleIdx, deathPrice, shake, won;
+let bear, obstacles, score, best, speed, dist, candleIdx, deathPrice, shake, won, wrongSide;
 best = parseInt(localStorage.getItem("fb-best") || "0", 10);
 bestLine.textContent = `Best: ${best}`;
 
 const BEAR_R = 17;          // collision radius
 const GRAVITY = 1750;
-const FLAP_VY = -520;
+const FLAP_VY = -540;
 const MAX_VY = 850;
-const CANDLE_W = 58;
-const SPACING = 250;
+const CANDLE_W = 44;
+const SPACING = 230;
 const BASE_SPEED = 165;
-
-function gapHeightForScore(s) {
-  return Math.max(168, 250 - s * 2.2);
-}
+const PAD_TOP = 56;         // y of the day's high
+const PAD_BOT = 72;         // room between the day's low and the floor
 
 function reset() {
   bear = { x: Math.min(W * 0.28, 240), y: H * 0.45, vy: 0, rot: 0, wingT: 0 };
@@ -176,6 +175,7 @@ function reset() {
   shake = 0;
   deathPrice = null;
   won = false;
+  wrongSide = false;
   // The level IS the last 24 hours, ridden chronologically from candle 0
   candleIdx = 0;
   scoreEl.textContent = `0 / ${candleData.length}`;
@@ -188,27 +188,32 @@ function reset() {
   }
 }
 
-// Normalize a candle's close against the whole 24h range, so the gap path
-// traces the actual shape of the day's chart. The gap is clamped fully
-// on-screen: at the day's high/low you still get a candle stub on each side.
-function gapCenterFor(idx, gapH) {
+// Map a price to a screen y. The playfield IS the day's chart: the day's
+// high sits near the ceiling, the day's low near the floor.
+function priceToY(p) {
   const span = dataHi - dataLo || 1;
-  const t = (candleData[idx].c - dataLo) / span; // 0 = day's low, 1 = day's high
-  const lo = 26 + gapH / 2; // gap center at day's high
-  const hi = H - floorH() - 26 - gapH / 2; // gap center at day's low
-  // High price = gap near top (you climb the pump, dive the dump)
-  return lo + (1 - t) * (hi - lo);
+  const usable = H - floorH() - PAD_TOP - PAD_BOT;
+  return PAD_TOP + (1 - (p - dataLo) / span) * usable;
 }
 
+// Each obstacle is ONE real candle at its true chart position.
+// Rule: fly OVER green (bullish) candles, UNDER red (bearish) ones.
 function spawnObstacle(x) {
   if (candleIdx >= candleData.length) return; // end of the day's chart
   const k = candleData[candleIdx];
-  const gapH = gapHeightForScore(score);
-  const cy = gapCenterFor(candleIdx, gapH);
+  let top = priceToY(Math.max(k.o, k.c));
+  let bot = priceToY(Math.min(k.o, k.c));
+  if (bot - top < 12) { // doji — give the body a minimum height
+    const m = (top + bot) / 2;
+    top = m - 6;
+    bot = m + 6;
+  }
   obstacles.push({
     x,
-    gapTop: cy - gapH / 2,
-    gapBot: cy + gapH / 2,
+    top,
+    bot,
+    wickTop: priceToY(k.h),
+    wickBot: priceToY(k.l),
     up: k.up,
     price: k.c,
     time: k.t,
@@ -253,6 +258,13 @@ async function startGame() {
   ensureAudio();
   if (!candleData) await loadCandles(selectedCoin);
   reset();
+  const fmtDay = (t) =>
+    new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const d0 = fmtDay(candleData[0].t);
+  const d1 = fmtDay(candleData[candleData.length - 1].t);
+  $("date-chip").textContent =
+    `${COIN_NAMES[selectedCoin]}/USD · ${d0 === d1 ? d0 : `${d0} – ${d1}`}, ` +
+    `${new Date(candleData[candleData.length - 1].t).getFullYear()}`;
   startScreen.hidden = true;
   overScreen.hidden = true;
   hud.hidden = false;
@@ -326,9 +338,11 @@ function showGameOver() {
   $("over-title").classList.add("rekt");
   $("final-score").textContent = score;
   $("final-best").textContent = best;
-  $("rekt-line").textContent = deathPrice
-    ? `Liquidated ${COIN_NAMES[selectedCoin]} at ${fmtPrice(deathPrice)}`
-    : "Liquidated";
+  $("rekt-line").textContent = !deathPrice
+    ? "Liquidated"
+    : wrongSide
+      ? `Wrong side of the candle — ${COIN_NAMES[selectedCoin]} at ${fmtPrice(deathPrice)}`
+      : `Liquidated ${COIN_NAMES[selectedCoin]} at ${fmtPrice(deathPrice)}`;
   overScreen.hidden = false;
   hud.hidden = true;
 }
@@ -336,7 +350,7 @@ function showGameOver() {
 // ---------- Update ----------
 function update(dt) {
   if (state === STATE.PLAYING) {
-    speed = BASE_SPEED + Math.min(110, score * 2.4);
+    speed = BASE_SPEED + Math.min(70, score * 1.8);
     dist += speed * dt;
 
     bear.vy = Math.min(MAX_VY, bear.vy + GRAVITY * dt);
@@ -351,10 +365,13 @@ function update(dt) {
     const last = obstacles[obstacles.length - 1];
     if (!last || last.x < W + 100) spawnObstacle((last ? last.x : W) + SPACING);
 
-    // Scoring + collision
+    // Scoring + collision. Passing on the wrong side (under a green,
+    // over a red) is a death, same as hitting the body.
     for (const o of obstacles) {
       if (!o.passed && o.x + CANDLE_W < bear.x - BEAR_R) {
         o.passed = true;
+        const okSide = o.up ? bear.y < o.top : bear.y > o.bot;
+        if (!okSide) { wrongSide = true; die(); break; }
         score++;
         scoreEl.textContent = `${score} / ${candleData.length}`;
         priceChip.textContent = `${COIN_NAMES[selectedCoin]} ${fmtPrice(o.price)} · ${fmtTime(o.time)}`;
@@ -380,18 +397,11 @@ function update(dt) {
 }
 
 function collides(o) {
-  // Circle vs the two candle body rects
-  const rects = [
-    { x: o.x, y: 0, w: CANDLE_W, h: o.gapTop },
-    { x: o.x, y: o.gapBot, w: CANDLE_W, h: H - o.gapBot },
-  ];
-  for (const r of rects) {
-    const cx = Math.max(r.x, Math.min(bear.x, r.x + r.w));
-    const cy = Math.max(r.y, Math.min(bear.y, r.y + r.h));
-    const dx = bear.x - cx, dy = bear.y - cy;
-    if (dx * dx + dy * dy < (BEAR_R - 2) * (BEAR_R - 2)) return true;
-  }
-  return false;
+  // Circle vs the candle body (wicks are decorative — no collision)
+  const cx = Math.max(o.x, Math.min(bear.x, o.x + CANDLE_W));
+  const cy = Math.max(o.top, Math.min(bear.y, o.bot));
+  const dx = bear.x - cx, dy = bear.y - cy;
+  return dx * dx + dy * dy < (BEAR_R - 2) * (BEAR_R - 2);
 }
 
 function floorH() { return Math.max(46, H * 0.07); }
@@ -410,12 +420,70 @@ function render() {
   ctx.fillStyle = grad;
   ctx.fillRect(-20, -20, W + 40, H + 40);
 
-  drawGrid();
-  for (const o of obstacles || []) drawCandlePair(o);
-  drawFloor();
+  if (state === STATE.MENU) {
+    drawGrid();
+  } else {
+    drawPriceAxis();
+    for (const o of obstacles || []) drawCandle(o);
+    drawFloor();
+    drawTimeLabels();
+  }
+  if (state === STATE.MENU) drawFloor();
   if (bear) drawBear();
 
   ctx.restore();
+}
+
+function niceStep(raw) {
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * mag) return m * mag;
+  return 10 * mag;
+}
+
+function fmtAxisPrice(p) {
+  return p.toLocaleString("en-US", { maximumFractionDigits: p < 1000 ? 1 : 0 });
+}
+
+function drawPriceAxis() {
+  if (!candleData) return;
+  const step = niceStep((dataHi - dataLo) / 5);
+  ctx.font = "11px 'IBM Plex Mono', monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  for (let p = Math.ceil(dataLo / step) * step; p <= dataHi; p += step) {
+    const y = priceToY(p);
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+    ctx.fillStyle = "#b4b3aab3";
+    ctx.fillText(fmtAxisPrice(p), W - 8, y - 3);
+  }
+}
+
+function drawTimeLabels() {
+  const y = H - floorH();
+  ctx.font = "11px 'IBM Plex Mono', monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const o of obstacles || []) {
+    if (new Date(o.time).getMinutes() !== 0) continue; // hourly ticks only
+    const cx = o.x + CANDLE_W / 2;
+    if (cx < -60 || cx > W + 60) continue;
+    ctx.strokeStyle = "#efeee018";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, 0);
+    ctx.lineTo(cx, y + 6);
+    ctx.stroke();
+    ctx.fillStyle = "#b4b3aab3";
+    ctx.fillText(
+      new Date(o.time).toLocaleTimeString("en-US", { hour: "numeric" }),
+      cx, y + 10
+    );
+  }
 }
 
 function drawGrid() {
@@ -440,47 +508,49 @@ function drawGrid() {
   }
 }
 
-function drawCandlePair(o) {
+function drawCandle(o) {
   const body = o.up ? COLORS.up : COLORS.down;
   const edge = o.up ? COLORS.upBright : COLORS.downBright;
   const cx = o.x + CANDLE_W / 2;
 
-  // Wicks (decorative, no collision): poke a little way into the gap
+  // Wick: true high -> low (decorative, no collision)
   ctx.strokeStyle = edge;
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(cx, o.gapTop);
-  ctx.lineTo(cx, o.gapTop + 12);
-  ctx.moveTo(cx, o.gapBot);
-  ctx.lineTo(cx, o.gapBot - 12);
+  ctx.moveTo(cx, o.wickTop);
+  ctx.lineTo(cx, o.wickBot);
   ctx.stroke();
 
-  // Bodies
-  drawCandleBody(o.x, -8, CANDLE_W, o.gapTop + 8, body, edge, true);
-  drawCandleBody(o.x, o.gapBot, CANDLE_W, H - o.gapBot + 8, body, edge, false);
-}
-
-function drawCandleBody(x, y, w, h, fill, edge, isTop) {
-  if (h <= 0) return;
-  const r = 6;
-  ctx.fillStyle = fill;
+  // Body: open -> close at its real chart position
+  ctx.fillStyle = body;
   ctx.strokeStyle = edge;
   ctx.lineWidth = 2;
   ctx.beginPath();
-  if (ctx.roundRect) {
-    ctx.roundRect(x, y, w, h, isTop ? [0, 0, r, r] : [r, r, 0, 0]);
-  } else {
-    ctx.rect(x, y, w, h);
-  }
+  if (ctx.roundRect) ctx.roundRect(o.x, o.top, CANDLE_W, o.bot - o.top, 4);
+  else ctx.rect(o.x, o.top, CANDLE_W, o.bot - o.top);
   ctx.fill();
   ctx.stroke();
   // Inner sheen line for depth
   ctx.strokeStyle = "#efeee022";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(x + 6, isTop ? y + 6 : y + 8);
-  ctx.lineTo(x + 6, y + h - 8);
+  ctx.moveTo(o.x + 5, o.top + 6);
+  ctx.lineTo(o.x + 5, o.bot - 6);
   ctx.stroke();
+
+  // Teach the rule on the first few candles
+  if (score < 5 && !o.passed && state === STATE.PLAYING) {
+    ctx.font = "600 11px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#efeee0cc";
+    if (o.up) {
+      ctx.textBaseline = "bottom";
+      ctx.fillText("▲ OVER", cx, Math.min(o.wickTop, o.top) - 8);
+    } else {
+      ctx.textBaseline = "top";
+      ctx.fillText("▼ UNDER", cx, Math.max(o.wickBot, o.bot) + 8);
+    }
+  }
 }
 
 function drawFloor() {
@@ -638,7 +708,11 @@ if (location.hash === "#autoplay") {
     setInterval(() => {
       if (state !== STATE.PLAYING) return;
       const next = obstacles.find((o) => o.x + CANDLE_W > bear.x - BEAR_R);
-      const target = next ? (next.gapTop + next.gapBot) / 2 + 25 : H * 0.5;
+      const target = next
+        ? next.up
+          ? next.top - 55
+          : Math.min(next.bot + 45, H - floorH() - 30)
+        : H * 0.5;
       if (bear.y > target && bear.vy > -100) flap();
     }, 50);
   });

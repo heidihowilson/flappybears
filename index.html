@@ -20,7 +20,10 @@
   <canvas id="game"></canvas>
 
   <header class="hud" id="hud" hidden>
-    <div class="chip mono" id="price-chip">BTC —</div>
+    <div class="hud-left">
+      <div class="chip mono" id="price-chip">BTC —</div>
+      <div class="chip mono small" id="date-chip"></div>
+    </div>
     <div class="score mono" id="score">0</div>
     <button class="chip icon-btn" id="mute-btn" aria-label="Toggle sound">🔊</button>
   </header>
@@ -37,6 +40,7 @@
       </div>
       <button class="btn-primary" id="play-btn">Play</button>
       <p class="meta mono" id="best-line">Best: 0</p>
+      <p class="meta" id="rules-line">Fly <strong class="over">OVER green</strong> candles · <strong class="under">UNDER red</strong> ones</p>
       <p class="meta small" id="data-note">Candles: live market data</p>
       <p class="meta small">Tap, click, or press space to flap</p>
     </div>
