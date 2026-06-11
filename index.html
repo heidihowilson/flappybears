@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Flappy Bears — Ride the candles</title>
+  <meta name="description" content="A bear market survival game. Flap through real crypto candlestick charts. Don't get rekt.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Flappy Bears — Ride the candles">
+  <meta property="og:description" content="A bear market survival game. Flap through real crypto candlestick charts. Don't get rekt.">
+  <meta property="og:url" content="https://flappybears.sethgholson.com">
+  <meta name="theme-color" content="#232320">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐻</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <header class="hud" id="hud" hidden>
+    <div class="chip mono" id="price-chip">BTC —</div>
+    <div class="score mono" id="score">0</div>
+    <button class="chip icon-btn" id="mute-btn" aria-label="Toggle sound">🔊</button>
+  </header>
+
+  <div class="overlay" id="start-screen">
+    <div class="card">
+      <div class="bear-mark">🐻</div>
+      <h1 class="display">Flappy Bears</h1>
+      <p class="tagline">Ride the candles. Don't get rekt.</p>
+      <div class="coin-row" id="coin-row">
+        <button class="coin-pill selected" data-coin="bitcoin" data-symbol="BTC">BTC</button>
+        <button class="coin-pill" data-coin="ethereum" data-symbol="ETH">ETH</button>
+        <button class="coin-pill" data-coin="solana" data-symbol="SOL">SOL</button>
+      </div>
+      <button class="btn-primary" id="play-btn">Play</button>
+      <p class="meta mono" id="best-line">Best: 0</p>
+      <p class="meta small" id="data-note">Candles: live market data</p>
+      <p class="meta small">Tap, click, or press space to flap</p>
+    </div>
+  </div>
+
+  <div class="overlay" id="over-screen" hidden>
+    <div class="card">
+      <h1 class="display rekt">REKT</h1>
+      <p class="tagline" id="rekt-line">Liquidated at $0</p>
+      <div class="stat-row">
+        <div class="stat">
+          <span class="stat-label">Score</span>
+          <span class="stat-value mono" id="final-score">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Best</span>
+          <span class="stat-value mono gold" id="final-best">0</span>
+        </div>
+      </div>
+      <button class="btn-primary" id="retry-btn">Play again</button>
+      <button class="btn-ghost" id="menu-btn">Menu</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
