@@ -538,8 +538,8 @@ function drawCandle(o) {
   ctx.lineTo(o.x + 5, o.bot - 6);
   ctx.stroke();
 
-  // Teach the rule on the first few candles
-  if (score < 5 && !o.passed && state === STATE.PLAYING) {
+  // Over/under marker on every candle you haven't cleared yet
+  if (!o.passed) {
     ctx.font = "600 11px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = "#efeee0cc";
